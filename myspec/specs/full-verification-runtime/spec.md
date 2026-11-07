@@ -106,7 +106,7 @@ MySpec（自有规格）快速验证 MUST 在一次非缓存检查中最多生�
 #### Scenario: 性能优化保留发布形态覆盖
 
 - **WHEN** 不需要证明安装或进程行为的 MySpec 测试通过进程内模拟运行
-- **THEN** 验证 MUST 继续保留至少一条官方打包、隔离安装、裸 `myspec` CLI（命令行程序）、校验、预览、差异和正式应用的完整路径
+- **THEN** 验证 MUST 继续保留至少一条官方打包、隔离安装、当前包内原Node启动器对应的 `myspec` CLI（命令行程序）、校验、预览、差异和正式应用的完整路径
 - **THEN** Windows 与 Linux npm（包管理器）布局及宿主 PATH（可执行文件搜索路径）隔离 MUST 继续被验证
 ### Requirement: Windows测试模板恢复只读文件
 

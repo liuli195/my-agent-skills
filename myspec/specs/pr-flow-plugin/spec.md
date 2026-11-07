@@ -798,3 +798,11 @@ PR Flow（拉取请求流程）MUST 把 complete（收尾）或 tweak（小改�
 - **WHEN** PR（拉取请求）已经报告自动推送的当前源提交
 - **THEN** PR Flow（拉取请求流程）MUST 在读取必需检查后再次确认源提交和目标提交未变化
 - **THEN** 只有属于该稳定提交快照的检查证据 MAY 用于后续审查和合并门禁
+### Requirement: PR Flow diagnoses explicitly selected plugin tool commands
+
+宿主驱动PR流程  MUST 为本进程提供全部必需工具的精确启动参数，诊断当前实际运行包，不保存机器路径或修改用户PATH。独立命令及CI固定安装语义保持。
+
+#### Scenario: Observable outcome
+
+- **WHEN** 查询工具身份或运行默认受管验证
+- **THEN** 使用同一当前包入口；显式输入不完整即失败，自定义外部验证命令保持原语义。

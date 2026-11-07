@@ -428,11 +428,13 @@ Build and Verify（构建与验证）配置指导 MUST 让动态扫描检查的�
 - **THEN** 系统 MUST NOT 在命令行 init（初始化）中执行对话式问答
 - **THEN** 系统 MUST NOT 在命令行 init（初始化）中自动生成仓库业务检查项
 ### Requirement: Build and Verify uses the installed CLI without repository runtime snapshots
-Build and Verify（构建与验证） build（构建） and verify（验证） commands MUST execute through the installed CLI（命令行程序） without copying a repository runtime（运行时） snapshot.
 
-#### Scenario: Build and verify do not create a runtime snapshot
-- **WHEN** 用户运行 `build-and-verify build`（构建）或 `build-and-verify verify`（验证）
-- **THEN** commands MUST NOT create, refresh or require `.build-and-verify/runtime/`
+构建验证技能  MUST 使用本次已核验包内Node启动器，不制作长期仓库运行副本，也不重新选择旧全局npm；独立安装与CI固定npm流程保持。
+
+#### Scenario: Observable outcome
+
+- **WHEN** 通过当前插件运行验证
+- **THEN** 实际包实现身份约束缓存；原固定基线、快速预算、并发层和完整模式边界不变。
 ### Requirement: Build and Verify 生命周期遵守统一 Codex 目录和旧来源迁移契约
 
 Build and Verify MUST 让选择 Codex 的 `doctor --codex`、`doctor --all`、`init --codex`、`init --all` 和 `update` 复用共享生命周期规则：显式 `--codex-home` 优先，Orca 临时目录回退到用户默认目录，Codex 子进程和配置读写使用同一目录；`update` 发现 Claude/Codex（编码助手/代码代理）的旧插件记录时 MUST 在任何软件包、待处理状态或客户端写入前以非零结果停止并报告精确的 `init` 命令。完成迁移后重新运行 `update` MUST 刷新稳定来源并返回只读诊断。

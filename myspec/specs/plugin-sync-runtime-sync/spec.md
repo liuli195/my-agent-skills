@@ -40,16 +40,27 @@ Plugin Sync MUST 对目标缺失、重复来源、安装失败及恢复失败分
 - **WHEN** 目标不可用、安装失败或恢复原来源失败
 - **THEN** 工具保留准确状态和错误，明确已完成步骤与下一动作，不报告完整成功
 - **THEN** 未完成项目更新或需要重启时明确列出，不删除源码、用户数据或无关安装
-### Requirement: Plugin Sync 仅管理本机市场并显式核对账号来源隔离
+### Requirement: Plugin Sync preserves local markets and orchestrates official account delivery
 
-Plugin Sync MUST 保留本机正式／开发双市场管理及两命令工具委托，不提供账号保存、云端开发交付或三端联动切换。账号正式交付归 Release Flow。账号来源隔离 MUST 先读回有效配置及来源，核对其他插件发现，仅在用户精确授权后修改本机配置。
+Plugin Sync  MUST 保留本机正式/开发双市场及完整来源隔离，同时通过宿主官方Creator作为唯一个人账号内容创建更新入口；客户端安装卸载使用各端实际官方能力。
 
-#### Scenario: 临时配置隔离账号来源
+#### Scenario: Observable outcome
 
-- **WHEN** 用户选择本地市场并授权来源隔离验证
-- **THEN** 系统 MUST 使用完整来源标识及正确临时参数键，读回默认激活及来源覆盖；不使用带内层引号的错误命令行键，不自动将临时策略写入永久配置。
+- **WHEN** 交付正式归档或切换来源
+- **THEN** 创建、保存、安装、发现、运行分别记录；无能力或未知结果停止，不混用原生内容发布API。
+### Requirement: Creator synchronization preserves identity and recoverability
 
-#### Scenario: 分端验收
+同步  MUST 先核对个人USER/PRIVATE上下文、精确对象与release标识、正式来源和完整文件；更新只删除已知旧受管文件，拒绝同版本不同内容和未知或冲突覆盖。操作发送前记录计划，失败保留原回执。
 
-- **WHEN** dot 固定正式账号对象而本机选择市场来源
-- **THEN** 系统 MUST 分别核验 dot 与本机发现、唯一来源、正文和资源，并明确旧会话缓存及未完成的新会话验收；不以保存或文件可读替代实际加载。
+#### Scenario: Observable outcome
+
+- **WHEN** 创建或更新个人正式对象
+- **THEN** 单次写入后只读核验；未知只读恢复、不重放；自更新最后执行并由新会话验证。
+### Requirement: Private adaptation and official discovery remain separate
+
+dot与本机Codex  MUST 核对同一私人适配对象和版本；配置授权的调用元数据允许隐式调用但不保证模型选择。Claude  MUST 使用官方市场原版，版本或内容与批准目标不符即停止该端迁移并请用户决定。
+
+#### Scenario: Observable outcome
+
+- **WHEN** 宿主发现或回退读取第三方技能
+- **THEN** 原生发现优先，只有核验可读的官方目录才可文件回退；访问拒绝或资源缺失不绕过。
