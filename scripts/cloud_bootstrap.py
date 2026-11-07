@@ -89,7 +89,7 @@ def verify_runtime(manifest, supplied, managed):
         metadata = json.loads((root / '.codex-plugin/plugin.json').read_text(encoding='utf-8'))
         if metadata['name'] != name or metadata['version'] != item['version'] or (declaration.get('version') and item['version'] != declaration['version']):
             raise ValueError(f'Runtime name or version mismatch: {name}')
-        files = {path.relative_to(root).as_posix(): path for path in root.rglob('*') if path.is_file()}
+        files = {path.relative_to(root).as_posix(): path for path in root.rglob('*') if path.is_file() and '__pycache__' not in path.parts and path.suffix != '.pyc'}
         if set(files) != set(item['files']) or any(path.is_symlink() for path in root.rglob('*')):
             raise ValueError(f'Runtime complete inventory mismatch: {name}')
         for relative, path in files.items():
@@ -233,6 +233,13 @@ def main(argv=None):
                 target = Path(item['root']) / binding['script']
                 if not target.resolve().is_relative_to(Path(item['root']).resolve()) or not target.is_file():
                     raise ValueError('Project runtime binding resource missing')
+                stable = Path(binding['target'])
+                source = Path(item['root']) / binding['source']
+                if stable.is_absolute() or '..' in stable.parts or not source.resolve().is_relative_to(Path(item['root']).resolve()):
+                    raise ValueError('Project binding path escapes declared root')
+                existing = project / stable
+                if (existing.exists() or existing.is_symlink()) and existing.resolve() != source.resolve():
+                    raise ValueError('Existing project binding source conflicts; explicit update authorization required')
         state = synchronize(manifest, root, args.latest, set(args.only))
         if args.skills_dir:
             target_dir = args.skills_dir.expanduser()

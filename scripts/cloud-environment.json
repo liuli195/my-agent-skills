@@ -38,7 +38,9 @@
       "bindings": [
         {
           "package": "data-store",
-          "script": "skills/data-store/scripts/project_binding.py"
+          "script": "skills/data-store/scripts/project_binding.py",
+          "source": "skills/data-store",
+          "target": ".local/skills/data-store"
         }
       ]
     },
