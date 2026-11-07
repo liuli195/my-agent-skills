@@ -6,6 +6,7 @@ import pytest
 class TestBootstrap:
     def test_public_bootstrap_reuses_current_runtime_and_rejects_conflicts(self, tmp_path, monkeypatch, capsys):
         import hashlib
+        from pathlib import Path
         from tests.test_cloud_bootstrap import entry
         app = entry()
         package = tmp_path / "official-package"
@@ -48,6 +49,38 @@ class TestBootstrap:
         monkeypatch.setattr(app, 'run', read_origin)
         assert app.main([*args, '--project', str(project)]) == 1
         assert len(calls) == 1 and (managed / 'installed.json').read_bytes() == state_before_conflict
+        # Preserve the successful public init -> real persistent binding chain.
+        import shutil, subprocess, sys
+        from pathlib import Path
+        data_source = Path(__file__).resolve().parents[2] / 'plugins/data-store'
+        data_package = tmp_path / 'official-data-package'
+        shutil.copytree(data_source, data_package, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+        metadata = json.loads((data_package / '.codex-plugin/plugin.json').read_text())
+        config['runtime_packages'].append({'name': 'data-store', 'skills': {'data-store': 'skills/data-store'}})
+        binding = {'package': 'data-store', 'script': 'skills/data-store/scripts/project_binding.py',
+                   'source': 'skills/data-store', 'target': '.local/skills/data-store'}
+        config['projects']['owner/project'] = {'requirements': [], 'npm': False,
+            'windows_setup': ['fixture-project-setup'], 'bindings': [binding]}
+        manifest.write_text(json.dumps(config))
+        value['packages']['data-store'] = {'root': str(data_package), 'lifetime': 'installed',
+            'pluginId': 'Official_data', 'releaseId': 'data_release', 'channel': 'RELEASE',
+            'version': metadata['version'], 'files': {path.relative_to(data_package).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in data_package.rglob('*') if path.is_file()}}
+        runtime.write_text(json.dumps(value))
+        data = project / 'data/keep.txt'; data.parent.mkdir(); data.write_text('existing business data')
+        executed = []
+        def current_command(command, **kwargs):
+            if command[0] == 'git': return read_origin(command, **kwargs)
+            if command[0] == 'fixture-project-setup' or (len(command)>1 and Path(str(command[1])).name == 'project_environment.py'):
+                return 'reused public dependency setup'
+            executed.append(command)
+            return subprocess.run([str(x) for x in command], check=True, text=True, capture_output=True, cwd=kwargs.get('cwd')).stdout
+        monkeypatch.setattr(app, 'run', current_command)
+        for _ in range(2):
+            assert app.main([*args, '--project', str(project)]) == 0
+            assert (project / '.local/skills/data-store').resolve() == (data_package / 'skills/data-store').resolve()
+            assert data.read_text() == 'existing business data'
+        assert [x[2] for x in executed] == ['connect', 'check', 'connect', 'check']
         state = (managed / "installed.json").read_bytes()
         value["packages"]["example"]["version"] = "wrong"
         runtime.write_text(json.dumps(value))
