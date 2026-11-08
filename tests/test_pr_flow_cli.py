@@ -5120,11 +5120,15 @@ def test_hotfix_isolates_consumed_tool_mapping_from_full_verification_environmen
         "myspec": ["node", str(flow_root / "active/myspec/bin/myspec.js")],
         "build-and-verify": ["node", str(flow_root / "active/build-and-verify/bin/build-and-verify.js")],
     }
+    # Capture only synthetic environment values, never host credentials.
+    monkeypatch.setattr(pr_flow.os, "environ", {
+        "PR_FLOW_TOOL_COMMANDS": json.dumps(commands),
+        "PR_FLOW_TEST_SENTINEL": "preserve-this-value",
+        "PATH": "",
+    })
     expected_command = [*commands["build-and-verify"], "verify", "--full"]
     if os.name == "nt":
         expected_command[0] = pr_flow.shutil.which("node") or "node"
-    monkeypatch.setenv("PR_FLOW_TOOL_COMMANDS", json.dumps(commands))
-    monkeypatch.setenv("PR_FLOW_TEST_SENTINEL", "preserve-this-value")
     parent_environment = dict(os.environ)
     before_commit = "a" * 40
     head_commit = "b" * 40
