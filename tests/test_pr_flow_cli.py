@@ -5120,6 +5120,9 @@ def test_hotfix_isolates_consumed_tool_mapping_from_full_verification_environmen
         "myspec": ["node", str(flow_root / "active/myspec/bin/myspec.js")],
         "build-and-verify": ["node", str(flow_root / "active/build-and-verify/bin/build-and-verify.js")],
     }
+    expected_command = [*commands["build-and-verify"], "verify", "--full"]
+    if os.name == "nt":
+        expected_command[0] = pr_flow.shutil.which("node") or "node"
     monkeypatch.setenv("PR_FLOW_TOOL_COMMANDS", json.dumps(commands))
     monkeypatch.setenv("PR_FLOW_TEST_SENTINEL", "preserve-this-value")
     parent_environment = dict(os.environ)
@@ -5161,7 +5164,7 @@ def test_hotfix_isolates_consumed_tool_mapping_from_full_verification_environmen
     assert "status: hotfix_complete" in result.stdout
     assert len(verification_calls) == 1
     command, child_environment = verification_calls[0]
-    assert command == [*commands["build-and-verify"], "verify", "--full"]
+    assert command == expected_command
     assert "PR_FLOW_TOOL_COMMANDS" not in child_environment
     assert child_environment["PR_FLOW_TEST_SENTINEL"] == "preserve-this-value"
     assert child_environment == {key: value for key, value in parent_environment.items() if key != "PR_FLOW_TOOL_COMMANDS"}
