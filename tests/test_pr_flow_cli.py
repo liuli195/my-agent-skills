@@ -5162,13 +5162,20 @@ def test_hotfix_isolates_consumed_tool_mapping_from_full_verification_environmen
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: hotfix_complete" in result.stdout
-    assert len(verification_calls) == 1
+    single_verification_call = len(verification_calls) == 1
+    assert single_verification_call, "Exactly one verification process must run"
     command, child_environment = verification_calls[0]
     assert command == expected_command
-    assert "PR_FLOW_TOOL_COMMANDS" not in child_environment
-    assert child_environment["PR_FLOW_TEST_SENTINEL"] == "preserve-this-value"
-    assert child_environment == {key: value for key, value in parent_environment.items() if key != "PR_FLOW_TOOL_COMMANDS"}
-    assert dict(os.environ) == parent_environment
+    mapping_isolated = "PR_FLOW_TOOL_COMMANDS" not in child_environment
+    assert mapping_isolated, "Consumed tool mapping must be absent from the child environment"
+    sentinel_preserved = child_environment.get("PR_FLOW_TEST_SENTINEL") == "preserve-this-value"
+    assert sentinel_preserved, "Unrelated sentinel must be preserved in the child environment"
+    other_environment_preserved = child_environment == {
+        key: value for key, value in parent_environment.items() if key != "PR_FLOW_TOOL_COMMANDS"
+    }
+    assert other_environment_preserved, "Only the consumed tool mapping may be removed from the child environment"
+    parent_environment_unchanged = dict(os.environ) == parent_environment
+    assert parent_environment_unchanged, "Parent environment must remain unchanged"
     assert ("push", "origin", "HEAD:refs/heads/main") in git_stub.calls
     assert len(list((project / ".pr-flow" / "runs").glob("hotfix-*.json"))) == 1
 
