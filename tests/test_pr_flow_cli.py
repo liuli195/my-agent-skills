@@ -5062,6 +5062,52 @@ def test_hotfix_runs_verify_command_before_authorization_phrase_check(flow_root:
     assert status["details"]["reason"] == "hotfix_verify_failed"
 
 
+def test_hotfix_rejects_empty_managed_full_verification_without_push_or_audit(flow_root: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    pr_flow = load_pr_flow_module()
+    project = flow_root / "project"
+    project.mkdir()
+    write_hotfix_pr_flow_config(project, verify_command="build-and-verify verify --full")
+    monkeypatch.delenv("PR_FLOW_TOOL_COMMANDS", raising=False)
+    before_commit = "a" * 40
+    head_commit = "b" * 40
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
+    for git_args, stdout in [
+        (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], ""),
+        (["rev-parse", "__snapshot_ref__"], before_commit + "\n"),
+        (["rev-parse", "HEAD"], head_commit + "\n"),
+        (["merge-base", "HEAD", before_commit], before_commit + "\n"),
+        (["status", "--short"], ""),
+        (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], ""),
+        (["rev-parse", "__snapshot_ref__"], before_commit + "\n"),
+        (["push", "origin", "HEAD:refs/heads/main"], ""),
+        (["fetch", "origin", "main"], ""),
+        (["rev-parse", "origin/main"], head_commit + "\n"),
+        (["config", "--get", "user.name"], "Test User\n"),
+        (["config", "--get", "user.email"], "test@example.com\n"),
+    ]:
+        git_stub.add(git_args, stdout=stdout)
+
+    def empty_verification(command, **_kwargs):
+        assert command[1:] == ["verify", "--full"]
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(pr_flow, "git", git_stub)
+    monkeypatch.setattr(pr_flow.subprocess, "run", empty_verification)
+    result = invoke_pr_flow(
+        ["hotfix", "--project", str(project), "--target", "main", "--authorization-phrase", HOTFIX_PHRASE],
+        module=pr_flow,
+    )
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "hotfix_verify_failed"
+    assert not any(call[0] == "push" for call in git_stub.calls)
+    assert not list((project / ".pr-flow" / "runs").glob("hotfix-*.json"))
+
+
 def test_hotfix_verify_command_preserves_windows_backslash_executable_path(flow_root: Path, monkeypatch) -> None:
     pr_flow = load_pr_flow_module()
     calls = []
