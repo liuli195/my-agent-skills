@@ -1068,6 +1068,7 @@ def _run_check_result(
     runner: Runner,
     runtime_identity: str,
     control: RunControl | None = None,
+    platform_info: str | None = None,
 ) -> CheckResult:
     started_at = time.monotonic()
     try:
@@ -1113,7 +1114,7 @@ def _run_check_result(
         try:
             evidence_directory = tempfile.TemporaryDirectory(prefix="build-and-verify-guard-")
             evidence_path = Path(evidence_directory.name) / "events.jsonl"
-            command, segments = _test_guard().protected_command(command, evidence_path)
+            command, segments = _test_guard().protected_command(command, evidence_path, platform_info)
         except (OSError, ValueError) as error:
             if evidence_directory is not None:
                 evidence_directory.cleanup()
@@ -1266,6 +1267,13 @@ def _run_scheduled_checks(
     parallel_checks = [(index, check) for index, check in indexed_selected if check.get("checkParallel") is True]
     serial_checks = [(index, check) for index, check in indexed_selected if check.get("checkParallel") is not True]
     results: list[CheckResult] = []
+    try:
+        platform_info = (_test_guard().platform_snapshot() if config.get("version", 1) == 2
+            and any(check["id"] not in config["verify"]["realChecks"] for check in selected) else None)
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return len(selected), [str(check["id"]) for check in selected], [
+            CheckResult(index, check, 1, stderr=f"{error}\n") for index, check in indexed_selected]
     if parallel_checks:
         max_workers = _max_parallel_checks(config, len(parallel_checks))
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
@@ -1282,6 +1290,7 @@ def _run_scheduled_checks(
                     runner,
                     runtime_identity,
                     control,
+                    platform_info,
                 ): (index, check)
                 for index, check in parallel_checks
             }
@@ -1318,6 +1327,7 @@ def _run_scheduled_checks(
                     runner,
                     runtime_identity,
                     control,
+                    platform_info,
                 )
                 for index, check in serial_checks
             )
@@ -1332,6 +1342,7 @@ def _run_scheduled_checks(
                 runner,
                 runtime_identity,
                 control,
+                platform_info,
             )
             for index, check in serial_checks
         )
@@ -1499,6 +1510,13 @@ def run_verify(
     input_memo.clear()
     git_files_memo.clear()
 
+    try:
+        platform_info = (_test_guard().platform_snapshot() if not control.expired()
+            and config.get("version", 1) == 2
+            and any(check["id"] not in verify["realChecks"] for _, check in pending) else None)
+    except ValueError as error:
+        return _verify_error(str(error))
+
     def execute(item: tuple[int, dict[str, Any]]) -> CheckResult:
         index, check = item
         if control.expired():
@@ -1507,7 +1525,7 @@ def run_verify(
         control.start_times[check['id']] = time.monotonic()
         control.active_checks.add(check['id'])
         result = _run_check_result(index, project, check, config, changed, runner, identity,
-            control if control.deadline is not None else None)
+            control if control.deadline is not None else None, platform_info)
         result.status = result.status or ("passed" if result.returncode == 0 else "failed")
         control.results[check['id']] = result
         control.active_checks.discard(check['id'])

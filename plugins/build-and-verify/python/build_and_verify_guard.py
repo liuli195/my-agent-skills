@@ -27,14 +27,35 @@ import threading
 import time
 
 
-ADAPTER_VERSION = "python-audit-v2+node-preload-v2"
+ADAPTER_VERSION = "python-audit-v3+node-preload-v2"
 
 
-def protected_command(command, evidence: Path):
+def platform_snapshot():
+    """Materialize OS metadata once in the trusted scheduling parent."""
+    try:
+        snapshot = {"platform": platform.platform(), "uname": list(platform.uname())}
+        payload = json.dumps(snapshot, ensure_ascii=False)
+        _decode_platform_snapshot(payload)
+        return payload
+    except Exception as error:
+        raise ValueError(f"runtime_guard_platform_metadata_failed: {error}") from error
+
+
+def _decode_platform_snapshot(payload):
+    snapshot = json.loads(payload)
+    if (not isinstance(snapshot, dict) or set(snapshot) != {"platform", "uname"}
+            or not isinstance(snapshot["platform"], str)
+            or not isinstance(snapshot["uname"], list) or len(snapshot["uname"]) != 6
+            or not all(isinstance(field, str) for field in snapshot["uname"])):
+        raise ValueError("runtime_guard_invalid_platform_metadata")
+    return snapshot
+
+
+def protected_command(command, evidence: Path, platform_info):
     """Adapt known runtime segments only; unknown wrappers never run unguarded."""
     guard = str(Path(__file__).resolve())
     if isinstance(command, list):
-        return _runtime_command(command, guard, str(evidence), "0"), 1
+        return _runtime_command(command, guard, str(evidence), "0", platform_info), 1
     # This is deliberately not a shell interpreter: only success chaining and
     # environment assignments are accepted. All other shell syntax fails closed.
     if "$(" in command or "`" in command:
@@ -73,7 +94,7 @@ def protected_command(command, evidence: Path):
         if match is None:
             raise ValueError("runtime_guard_uncovered_command: missing executable")
         executable = match[1].strip("\"'")
-        launch = _runtime_command([executable], guard, str(evidence), str(count))
+        launch = _runtime_command([executable], guard, str(evidence), str(count), platform_info)
         encoded = __import__("subprocess").list2cmdline(launch) if os.name == "nt" else shlex.join(launch)
         adapted.append(prefix + encoded + match[2])
         count += 1
@@ -83,14 +104,14 @@ def protected_command(command, evidence: Path):
     return "&&".join(adapted), count
 
 
-def _runtime_command(tokens, guard, evidence, segment):
+def _runtime_command(tokens, guard, evidence, segment, platform_info):
     executable = str(tokens[0])
     name = executable.replace("\\", "/").rsplit("/", 1)[-1]
     if re.fullmatch(r"node(?:\.exe)?", name, re.I):
-        return [sys.executable, "-S", "-B", guard, evidence, segment, platform.platform(), "--node", *tokens]
+        return [sys.executable, "-S", "-B", guard, evidence, segment, platform_info, "--node", *tokens]
     if not re.fullmatch(r"python(?:\d+(?:\.\d+)*)?(?:\.exe)?", name, re.I):
         raise ValueError(f"runtime_guard_uncovered_command: {executable}; Python or Node adapter required")
-    return [executable, "-S", "-B", guard, evidence, segment, platform.platform(), *tokens[1:]]
+    return [executable, "-S", "-B", guard, evidence, segment, platform_info, *tokens[1:]]
 
 
 def _run_node(evidence, segment, args):
@@ -186,9 +207,13 @@ def _run(evidence: str, segment: str, platform_info: str, args: list[str]) -> in
             sys.stderr.flush()
             os._exit(1)
     atexit.register(finish)
-    # xdist's informational platform string must not invoke `uname -p` from a
-    # guarded worker. The parent has already resolved this same OS metadata.
-    platform._platform_cache[False, False] = platform_info
+    # Restore before site/project imports. CPython 3.12's processor is a cached
+    # property, not a sixth constructor argument; even an empty value is valid.
+    snapshot = _decode_platform_snapshot(platform_info)
+    uname = platform.uname_result(*snapshot["uname"][:5])
+    uname.__dict__["processor"] = snapshot["uname"][5]
+    platform._uname_cache = uname
+    platform._platform_cache[False, False] = snapshot["platform"]
     launch = threading.local()
     capture_fds = set()
     denied = {"os.system", "os.startfile", "os.startfile/2", "os.fork", "os.forkpty", "os.posix_spawn", "os.exec",
@@ -263,7 +288,7 @@ def _run(evidence: str, segment: str, platform_info: str, args: list[str]) -> in
     else:
         sys.path.insert(0, os.getcwd() if args[:1] == ["-m"] else str(Path(args[0]).resolve().parent))
         if args[:2] == ["-m", "pytest"]:
-            _adapt_pytest(launch, record, evidence, segment)
+            _adapt_pytest(launch, record, evidence, segment, platform_info)
             import pytest
             return int(pytest.main(["-p", "build_and_verify_guard", *args[2:]]))
         sys.argv = args[:]
@@ -363,7 +388,7 @@ def _adapt_sqlite(record, launch):
     return protect
 
 
-def _adapt_pytest(launch, record, evidence, segment):
+def _adapt_pytest(launch, record, evidence, segment, platform_info):
     try:
         import execnet.gateway_io as gateway_io
         from xdist.workermanage import NodeManager
@@ -391,7 +416,7 @@ def _adapt_pytest(launch, record, evidence, segment):
             raise ValueError("runtime_guard_uncovered_command: only local default xdist workers are supported")
         with worker_lock:
             worker_unit = f"python:{segment}:{os.getpid()}:{next(worker_units)}"
-        command = [sys.executable, "-S", "-B", "-u", str(Path(__file__).resolve()), evidence, segment, platform.platform(), "--worker", worker_unit]
+        command = [sys.executable, "-S", "-B", "-u", str(Path(__file__).resolve()), evidence, segment, platform_info, "--worker", worker_unit]
         # CPython audits argv as the serialized command line on Windows.
         launch.command = execmodel.subprocess.list2cmdline(command) if os.name == "nt" else command
         try:
