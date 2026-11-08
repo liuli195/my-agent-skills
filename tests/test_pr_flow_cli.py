@@ -5108,6 +5108,68 @@ def test_hotfix_rejects_empty_managed_full_verification_without_push_or_audit(fl
     assert not list((project / ".pr-flow" / "runs").glob("hotfix-*.json"))
 
 
+def test_hotfix_isolates_consumed_tool_mapping_from_full_verification_environment(flow_root: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    pr_flow = load_pr_flow_module()
+    project = flow_root / "project"
+    project.mkdir()
+    write_hotfix_pr_flow_config(project, verify_command="build-and-verify verify --full")
+    commands = {
+        "myspec": ["node", str(flow_root / "active/myspec/bin/myspec.js")],
+        "build-and-verify": ["node", str(flow_root / "active/build-and-verify/bin/build-and-verify.js")],
+    }
+    monkeypatch.setenv("PR_FLOW_TOOL_COMMANDS", json.dumps(commands))
+    monkeypatch.setenv("PR_FLOW_TEST_SENTINEL", "preserve-this-value")
+    parent_environment = dict(os.environ)
+    before_commit = "a" * 40
+    head_commit = "b" * 40
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
+    for git_args, stdout in [
+        (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], ""),
+        (["rev-parse", "__snapshot_ref__"], before_commit + "\n"),
+        (["rev-parse", "HEAD"], head_commit + "\n"),
+        (["merge-base", "HEAD", before_commit], before_commit + "\n"),
+        (["status", "--short"], ""),
+        (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], ""),
+        (["rev-parse", "__snapshot_ref__"], before_commit + "\n"),
+        (["push", "origin", "HEAD:refs/heads/main"], ""),
+        (["fetch", "origin", "main"], ""),
+        (["rev-parse", "origin/main"], head_commit + "\n"),
+        (["config", "--get", "user.name"], "Test User\n"),
+        (["config", "--get", "user.email"], "test@example.com\n"),
+    ]:
+        git_stub.add(git_args, stdout=stdout)
+    verification_calls = []
+
+    def passed_verification(command, **kwargs):
+        environment = kwargs.get("env")
+        verification_calls.append((list(command), dict(os.environ if environment is None else environment)))
+        return subprocess.CompletedProcess(
+            command, 0, "checked: verify.example\nfull-not-run: false\nstatus: passed\n", ""
+        )
+
+    monkeypatch.setattr(pr_flow, "git", git_stub)
+    monkeypatch.setattr(pr_flow.subprocess, "run", passed_verification)
+    result = invoke_pr_flow(
+        ["hotfix", "--project", str(project), "--target", "main", "--authorization-phrase", HOTFIX_PHRASE],
+        module=pr_flow,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: hotfix_complete" in result.stdout
+    assert len(verification_calls) == 1
+    command, child_environment = verification_calls[0]
+    assert command == [*commands["build-and-verify"], "verify", "--full"]
+    assert "PR_FLOW_TOOL_COMMANDS" not in child_environment
+    assert child_environment["PR_FLOW_TEST_SENTINEL"] == "preserve-this-value"
+    assert child_environment == {key: value for key, value in parent_environment.items() if key != "PR_FLOW_TOOL_COMMANDS"}
+    assert dict(os.environ) == parent_environment
+    assert ("push", "origin", "HEAD:refs/heads/main") in git_stub.calls
+    assert len(list((project / ".pr-flow" / "runs").glob("hotfix-*.json"))) == 1
+
+
 def test_hotfix_verify_command_preserves_windows_backslash_executable_path(flow_root: Path, monkeypatch) -> None:
     pr_flow = load_pr_flow_module()
     calls = []
