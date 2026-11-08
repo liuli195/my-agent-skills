@@ -2702,8 +2702,14 @@ def run_hotfix_verify_command(project: Path, command: str) -> subprocess.Complet
     requires_full_report = (
         command_args[:2] == ["build-and-verify", "verify"] and "--full" in command_args[2:]
     )
+    subprocess_options: dict[str, Any] = {}
     if command_args[0] in TOOLCHAIN_TOOLS and "PR_FLOW_TOOL_COMMANDS" in os.environ:
+        is_build_and_verify = command_args[0] == "build-and-verify"
         command_args = [*tool_command(command_args[0]), *command_args[1:]]
+        if is_build_and_verify:
+            child_environment = os.environ.copy()
+            child_environment.pop("PR_FLOW_TOOL_COMMANDS")
+            subprocess_options["env"] = child_environment
     if os.name == "nt" and not ntpath.dirname(command_args[0]):
         command_args[0] = shutil.which(command_args[0]) or command_args[0]
 
@@ -2715,6 +2721,7 @@ def run_hotfix_verify_command(project: Path, command: str) -> subprocess.Complet
             text=True,
             capture_output=True,
             shell=False,
+            **subprocess_options,
         )
     except FileNotFoundError as exc:
         raise PrFlowError(

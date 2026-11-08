@@ -5062,7 +5062,24 @@ def test_hotfix_runs_verify_command_before_authorization_phrase_check(flow_root:
     assert status["details"]["reason"] == "hotfix_verify_failed"
 
 
-def test_hotfix_rejects_empty_managed_full_verification_without_push_or_audit(flow_root: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("use_mapping", [False, True], ids=["bare", "mapped"])
+@pytest.mark.parametrize("report, returncode", [
+    pytest.param("", 0, id="empty-output"),
+    pytest.param("checked: verify.example\nfull-not-run: false\n", 0, id="missing-status"),
+    pytest.param("status: passed\nfull-not-run: false\n", 0, id="missing-checked"),
+    pytest.param("status: passed\nchecked: verify.example\n", 0, id="missing-full-not-run"),
+    pytest.param("status: passed\nchecked: \nfull-not-run: false\n", 0, id="empty-checked"),
+    pytest.param("status: skipped\nchecked: verify.example\nfull-not-run: false\n", 0, id="skipped"),
+    pytest.param("status: passed\nchecked: verify.example\nfull-not-run: true\n", 0, id="full-not-run"),
+    pytest.param("status: passed\nchecked: verify.example\nfull-not-run: false\nstatus: failed\n", 0, id="final-failed"),
+    pytest.param("status: passed\nchecked: verify.example\nfull-not-run: false\nchecked: \n", 0, id="final-empty-checked"),
+    pytest.param("status: passed\nchecked: verify.example\nfull-not-run: false\nfull-not-run: true\n", 0, id="final-full-not-run"),
+    pytest.param("  status: passed\n  checked: verify.example\n  full-not-run: false\n", 0, id="indented-fields"),
+    pytest.param("status: passed\nchecked: verify.example\nfull-not-run: false\n", 1, id="nonzero-exit"),
+])
+def test_hotfix_rejects_invalid_managed_full_verification_without_push_or_audit(
+    flow_root: Path, monkeypatch, report: str, returncode: int, use_mapping: bool,
+) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
@@ -5070,7 +5087,14 @@ def test_hotfix_rejects_empty_managed_full_verification_without_push_or_audit(fl
     project = flow_root / "project"
     project.mkdir()
     write_hotfix_pr_flow_config(project, verify_command="build-and-verify verify --full")
-    monkeypatch.delenv("PR_FLOW_TOOL_COMMANDS", raising=False)
+    # Never capture host credentials, including on failing report paths.
+    synthetic_environment = {"PATH": "", "PR_FLOW_TEST_SENTINEL": "preserve-this-value"}
+    if use_mapping:
+        synthetic_environment["PR_FLOW_TOOL_COMMANDS"] = json.dumps({
+            "myspec": ["node", "synthetic-myspec.js"],
+            "build-and-verify": ["node", "synthetic-build-and-verify.js"],
+        })
+    monkeypatch.setattr(pr_flow.os, "environ", synthetic_environment)
     before_commit = "a" * 40
     head_commit = "b" * 40
     git_stub = CommandStub(body_reader=read_body_file, consume=True)
@@ -5090,12 +5114,12 @@ def test_hotfix_rejects_empty_managed_full_verification_without_push_or_audit(fl
     ]:
         git_stub.add(git_args, stdout=stdout)
 
-    def empty_verification(command, **_kwargs):
-        assert command[1:] == ["verify", "--full"]
-        return subprocess.CompletedProcess(command, 0, "", "")
+    def invalid_verification(command, **_kwargs):
+        assert command[-2:] == ["verify", "--full"]
+        return subprocess.CompletedProcess(command, returncode, report, "")
 
     monkeypatch.setattr(pr_flow, "git", git_stub)
-    monkeypatch.setattr(pr_flow.subprocess, "run", empty_verification)
+    monkeypatch.setattr(pr_flow.subprocess, "run", invalid_verification)
     result = invoke_pr_flow(
         ["hotfix", "--project", str(project), "--target", "main", "--authorization-phrase", HOTFIX_PHRASE],
         module=pr_flow,
@@ -5108,27 +5132,46 @@ def test_hotfix_rejects_empty_managed_full_verification_without_push_or_audit(fl
     assert not list((project / ".pr-flow" / "runs").glob("hotfix-*.json"))
 
 
-def test_hotfix_isolates_consumed_tool_mapping_from_full_verification_environment(flow_root: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("verify_command, use_mapping, isolate_mapping, report, warning", [
+    pytest.param("build-and-verify verify --full", True, True,
+                 "checked: verify.example\nfull-not-run: false\nstatus: passed\n", "", id="mapped-full"),
+    pytest.param("build-and-verify verify --full", False, False,
+                 "checked: verify.example\nfull-not-run: false\nstatus: passed\n", "", id="bare-full"),
+    pytest.param("build-and-verify verify --full", True, True,
+                 "checked: verify.example\nfull-not-run: false\nstatus: passed\n", "nonfatal warning\n", id="stderr-warning"),
+    pytest.param("python -m pytest", True, False, "", "", id="custom-command"),
+    pytest.param("build-and-verify verify", True, True, "", "", id="fast-verification"),
+    pytest.param("build-and-verify build --full", True, True, "", "", id="other-build-mode"),
+    pytest.param("myspec validate-main --full", True, False, "", "", id="other-tool"),
+])
+def test_hotfix_preserves_verification_environment_boundaries_and_compatible_success(
+    flow_root: Path, monkeypatch, verify_command: str, use_mapping: bool,
+    isolate_mapping: bool, report: str, warning: str,
+) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     pr_flow = load_pr_flow_module()
     project = flow_root / "project"
     project.mkdir()
-    write_hotfix_pr_flow_config(project, verify_command="build-and-verify verify --full")
+    write_hotfix_pr_flow_config(project, verify_command=verify_command)
     commands = {
         "myspec": ["node", str(flow_root / "active/myspec/bin/myspec.js")],
         "build-and-verify": ["node", str(flow_root / "active/build-and-verify/bin/build-and-verify.js")],
     }
     # Capture only synthetic environment values, never host credentials.
-    monkeypatch.setattr(pr_flow.os, "environ", {
-        "PR_FLOW_TOOL_COMMANDS": json.dumps(commands),
+    synthetic_environment = {
         "PR_FLOW_TEST_SENTINEL": "preserve-this-value",
         "PATH": "",
-    })
-    expected_command = [*commands["build-and-verify"], "verify", "--full"]
+    }
+    if use_mapping:
+        synthetic_environment["PR_FLOW_TOOL_COMMANDS"] = json.dumps(commands)
+    monkeypatch.setattr(pr_flow.os, "environ", synthetic_environment)
+    expected_command = verify_command.split()
+    if use_mapping and expected_command[0] in commands:
+        expected_command = [*commands[expected_command[0]], *expected_command[1:]]
     if os.name == "nt":
-        expected_command[0] = pr_flow.shutil.which("node") or "node"
+        expected_command[0] = pr_flow.shutil.which(expected_command[0]) or expected_command[0]
     parent_environment = dict(os.environ)
     before_commit = "a" * 40
     head_commit = "b" * 40
@@ -5152,10 +5195,8 @@ def test_hotfix_isolates_consumed_tool_mapping_from_full_verification_environmen
 
     def passed_verification(command, **kwargs):
         environment = kwargs.get("env")
-        verification_calls.append((list(command), dict(os.environ if environment is None else environment)))
-        return subprocess.CompletedProcess(
-            command, 0, "checked: verify.example\nfull-not-run: false\nstatus: passed\n", ""
-        )
+        verification_calls.append((list(command), dict(os.environ if environment is None else environment), "env" in kwargs))
+        return subprocess.CompletedProcess(command, 0, report, warning)
 
     monkeypatch.setattr(pr_flow, "git", git_stub)
     monkeypatch.setattr(pr_flow.subprocess, "run", passed_verification)
@@ -5168,15 +5209,18 @@ def test_hotfix_isolates_consumed_tool_mapping_from_full_verification_environmen
     assert "status: hotfix_complete" in result.stdout
     single_verification_call = len(verification_calls) == 1
     assert single_verification_call, "Exactly one verification process must run"
-    command, child_environment = verification_calls[0]
+    command, child_environment, explicit_environment = verification_calls[0]
     assert command == expected_command
-    mapping_isolated = "PR_FLOW_TOOL_COMMANDS" not in child_environment
-    assert mapping_isolated, "Consumed tool mapping must be absent from the child environment"
+    environment_parameter_preserved = explicit_environment == isolate_mapping
+    assert environment_parameter_preserved, "Only consumed build-and-verify mappings require an explicit child environment"
+    mapping_boundary_respected = ("PR_FLOW_TOOL_COMMANDS" not in child_environment) == (isolate_mapping or not use_mapping)
+    assert mapping_boundary_respected, "Tool mapping must respect the command environment boundary"
     sentinel_preserved = child_environment.get("PR_FLOW_TEST_SENTINEL") == "preserve-this-value"
     assert sentinel_preserved, "Unrelated sentinel must be preserved in the child environment"
-    other_environment_preserved = child_environment == {
-        key: value for key, value in parent_environment.items() if key != "PR_FLOW_TOOL_COMMANDS"
-    }
+    expected_environment = parent_environment.copy()
+    if isolate_mapping:
+        expected_environment.pop("PR_FLOW_TOOL_COMMANDS")
+    other_environment_preserved = child_environment == expected_environment
     assert other_environment_preserved, "Only the consumed tool mapping may be removed from the child environment"
     parent_environment_unchanged = dict(os.environ) == parent_environment
     assert parent_environment_unchanged, "Parent environment must remain unchanged"
