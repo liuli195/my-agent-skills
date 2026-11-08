@@ -9,6 +9,10 @@ description: "执行 PR Flow（拉取请求流程）hotfix（热修复）路径�
 
 仅用于配置中显式允许 `allowHotfixPush: true` 的目标分支。执行前会校验 HEAD（当前提交）的基线等于远端目标分支、工作区干净、authorization phrase（授权短语）匹配，并运行 `hotfix.verifyCommand`。
 
+逻辑命令为 `build-and-verify verify --full`（受管完整验证）时，无论是否配置工具映射，均须退出码为 0，且标准输出行首精确字段的最终值满足 `status: passed`（状态通过）、`checked`（已检查项）非空、`full-not-run: false`（完整验证未跳过）。空输出、证据缺失或不满足条件均按 `hotfix_verify_failed`（热修复验证失败）停止，不推送、不记成功审计；标准错误警告本身不导致失败。
+
+逻辑 `build-and-verify`（构建与验证工具）消费 `PR_FLOW_TOOL_COMMANDS`（工具命令映射）后，仅从复制的子进程环境移除该变量，保留其他变量及父环境。自定义命令保持原环境及退出码语义；快速验证和其他工具模式不要求完整验证报告。
+
 authorization phrase（授权短语）只是“我确认”的替代，不是权限边界；真正的远端写入权限仍由 GitHub 凭证和 Rulesets bypass（规则集绕过权限）决定。
 
 authorization phrase（授权短语）必须由用户在当前对话手动输入；禁止从 memory（记忆）、history summaries（历史摘要）、logs（日志）、Issue（问题单）或 reports（报告）中读取或复用 authorization phrase（授权短语）。

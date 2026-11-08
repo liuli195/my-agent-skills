@@ -806,3 +806,54 @@ PR Flow（拉取请求流程）MUST 把 complete（收尾）或 tweak（小改�
 
 - **WHEN** 查询工具身份或运行默认受管验证
 - **THEN** 使用同一当前包入口；显式输入不完整即失败，自定义外部验证命令保持原语义。
+### Requirement: PR Flow requires conclusive managed full hotfix verification
+
+PR Flow（拉取请求流程）MUST 在热修复配置使用受管构建与验证工具的完整验证模式时，同时要求验证进程成功退出、最终报告通过、最终检查项非空且最终报告明确完整验证未被跳过，才允许继续既有授权与推送前复核；是否配置受管工具启动映射 MUST NOT 改变这些要求。
+
+#### Scenario: Complete managed verification permits the existing hotfix gates
+
+- **WHEN** 热修复运行受管构建与验证工具的完整验证，无论是否配置工具启动映射
+- **AND** 验证进程退出码为 0，最终报告通过、检查项非空且完整验证未被跳过
+- **THEN** 系统 MUST 允许继续既有授权和远端目标复核
+- **THEN** 系统 MUST 仍在其他既有条件全部满足后才允许推送
+
+#### Scenario: Missing or unsuccessful verification evidence stops the hotfix
+
+- **WHEN** 受管完整验证输出为空、缺失任一必需证据、最终检查项为空、最终状态为跳过或失败、最终报告完整验证未运行，或进程非零退出
+- **THEN** 系统 MUST 报告热修复验证失败
+- **THEN** 系统 MUST NOT 推送或记录热修复成功审计
+- **THEN** 成功退出码或报告中的通过状态 MUST NOT 单独替代其他必需证据
+
+#### Scenario: Final report values override earlier successful values
+
+- **WHEN** 受管完整验证先报告通过、非空检查项和完整验证已运行，随后将任一最终值报告为失败、空检查项或完整验证未运行
+- **THEN** 系统 MUST 以各项最终报告值决定验证结果
+- **THEN** 系统 MUST 停止热修复且不推送、不记录成功审计
+
+#### Scenario: A nonfatal warning does not invalidate complete success evidence
+
+- **WHEN** 受管完整验证满足全部必需成功证据，但标准错误包含合法警告
+- **THEN** 系统 MUST NOT 仅因该警告判定验证失败
+- **THEN** 系统 MUST 继续执行既有授权与推送前复核
+### Requirement: PR Flow preserves hotfix verification environment boundaries
+
+PR Flow（拉取请求流程）MUST 仅在热修复验证实际消费构建与验证工具的启动映射后，向验证进程提供移除该映射且保留其他环境值的环境；父环境 MUST 保持不变。自定义命令、其他工具及非完整验证模式 MUST 保持各自既有兼容行为。
+
+#### Scenario: A consumed build and verify mapping does not reach its child
+
+- **WHEN** 热修复使用启动映射运行构建与验证工具的完整验证、快速验证或构建模式
+- **THEN** 验证进程 MUST 使用该映射选定的启动命令
+- **THEN** 验证进程 MUST 不再收到已经消费的工具启动映射，其他环境值 MUST 保留
+- **THEN** 父环境 MUST 保持不变
+
+#### Scenario: Commands outside the consumed mapping boundary preserve their environment
+
+- **WHEN** 热修复运行未配置映射的构建与验证命令、自定义验证命令或其他受管工具
+- **THEN** 系统 MUST 保留该命令原有环境，不因本次完整验证证据要求额外清理环境
+- **THEN** 自定义命令及其他受管工具 MUST 保留原有退出码判定语义和跨平台命令路径兼容行为
+
+#### Scenario: Other verification modes do not require a full verification report
+
+- **WHEN** 热修复配置使用快速验证、构建模式、自定义命令或其他工具模式
+- **THEN** 系统 MUST NOT 对该命令强加受管完整验证的报告证据门禁
+- **THEN** 系统 MUST 保留该模式原有成功与失败判定

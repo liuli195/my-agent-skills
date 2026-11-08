@@ -2699,8 +2699,17 @@ def run_hotfix_verify_command(project: Path, command: str) -> subprocess.Complet
         ) from exc
     if not command_args:
         raise PrFlowError("hotfix_verify_command_missing", {"reason": "hotfix_verify_command_missing"})
+    requires_full_report = (
+        command_args[:2] == ["build-and-verify", "verify"] and "--full" in command_args[2:]
+    )
+    subprocess_options: dict[str, Any] = {}
     if command_args[0] in TOOLCHAIN_TOOLS and "PR_FLOW_TOOL_COMMANDS" in os.environ:
+        is_build_and_verify = command_args[0] == "build-and-verify"
         command_args = [*tool_command(command_args[0]), *command_args[1:]]
+        if is_build_and_verify:
+            child_environment = os.environ.copy()
+            child_environment.pop("PR_FLOW_TOOL_COMMANDS")
+            subprocess_options["env"] = child_environment
     if os.name == "nt" and not ntpath.dirname(command_args[0]):
         command_args[0] = shutil.which(command_args[0]) or command_args[0]
 
@@ -2712,6 +2721,7 @@ def run_hotfix_verify_command(project: Path, command: str) -> subprocess.Complet
             text=True,
             capture_output=True,
             shell=False,
+            **subprocess_options,
         )
     except FileNotFoundError as exc:
         raise PrFlowError(
@@ -2725,7 +2735,20 @@ def run_hotfix_verify_command(project: Path, command: str) -> subprocess.Complet
             },
         ) from exc
 
-    if result.returncode != 0:
+    full_report: dict[str, str] = {}
+    if requires_full_report:
+        for line in result.stdout.splitlines():
+            key, separator, value = line.partition(":")
+            if separator and key in {"status", "checked", "full-not-run"}:
+                full_report[key] = value.strip()
+    if result.returncode != 0 or (
+        requires_full_report
+        and (
+            full_report.get("status") != "passed"
+            or not full_report.get("checked")
+            or full_report.get("full-not-run") != "false"
+        )
+    ):
         details = command_failure_details("hotfix_verify_failed", result)
         details["command"] = command
         raise PrFlowError("hotfix_verify_failed", details)

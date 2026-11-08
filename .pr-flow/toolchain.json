@@ -2,9 +2,12 @@
   "schemaVersion": 1,
   "tools": {
     "myspec": {
-      "mode": "release",
+      "mode": "dev",
       "packageName": "@liuli195/myspec",
-      "packageVersion": "2.9.2"
+      "sourceRepository": "https://github.com/liuli195/my-agent-skills",
+      "sourceCommit": "1b9d7b299fb465fd53e279ed50930869de39b99d",
+      "packageDirectory": "plugins/my-spec",
+      "implementationIdentity": "sha256:53644b517074af74febdd4673ded1b85fa233de6961100ec740dea9e47702352"
     },
     "build-and-verify": {
       "mode": "release",
