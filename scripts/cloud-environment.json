@@ -1,0 +1,42 @@
+{
+  "projects": {
+    "liuli195/my-agent-skills": {
+      "requirements": [
+        "requirements-dev.txt"
+      ],
+      "npm": true,
+      "windows_setup": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/setup-worktree.ps1"
+      ]
+    },
+    "liuli195/Wow-Addons": {
+      "requirements": [
+        "scripts/dev/requirements.txt",
+        "projects/sim2gse/requirements.txt"
+      ],
+      "npm": true,
+      "windows_setup": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/dev/setup.ps1"
+      ]
+    },
+    "liuli195/Quant-Research-Lab": {
+      "requirements": [
+        "requirements.txt",
+        "requirements-dev.txt"
+      ],
+      "npm": false,
+      "windows_setup": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/setup-worktree.ps1"
+      ]
+    }
+  }
+}
