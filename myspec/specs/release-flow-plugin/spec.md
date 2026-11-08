@@ -469,7 +469,7 @@ Release Flow  MUST 仅负责版本、完整正式包和GitHub发布；正式账�
 - **THEN** 包记录精确标签和来源，脏工作树或DEV账号包被拒绝。
 ### Requirement: 完整插件快照按发布输入及依赖变化复用
 
-系统 MUST 沿用九项单一发布清单识别变化及依赖影响，仅重打受影响插件的完整包；每包包含必要技能、脚本、共享实现、依赖声明、隐藏元数据与资源，并记录来源、脏状态、版本、输入身份、摘要、大小及耗时。两 npm 工具 MUST 注入各自来源的共享实现并保持原打包入口。
+系统 MUST 沿用九项单一发布清单识别变化及依赖影响，仅重打受影响插件的完整包；每包包含必要技能、脚本、共享实现、依赖声明、隐藏元数据与资源，并记录来源、脏状态、版本、输入身份、摘要、大小及耗时。两 npm 工具的完整包 MUST 分别包含与各自发布来源一致的运行所需内容，并保持既有打包入口兼容。
 
 #### Scenario: 未变完整包复用
 
@@ -519,7 +519,7 @@ Release Flow  MUST 仅负责版本、完整正式包和GitHub发布；正式账�
 - **THEN** 包在标签树外产生，包含双层来源、作者、完整资源和许可；来源或字段不符时停止完整归档，不重发已经成功的版本。
 ### Requirement: Formal marketplace projection excludes local development installation paths
 
-Formal release projection MUST select canonical plugin sources from the release registry rather than retain machine-local development installation paths. Complete formal plugin packages and existing npm package behavior MUST remain compatible with their declared distribution channels.
+Formal release projection MUST produce catalogs that reference canonical formal plugin sources and contain no machine-local development installation paths. Complete formal plugin packages and existing npm package behavior MUST remain compatible with their declared distribution channels.
 
 #### Scenario: Development marketplace sources use locally assembled tool packages
 
@@ -528,7 +528,7 @@ Formal release projection MUST select canonical plugin sources from the release 
 - **THEN** formal command-tool packages MUST still contain their required shared runtime and existing npm distribution MUST remain available
 ### Requirement: 正式 Git 市场命令工具目录自包含
 
-系统 MUST 在正式发布的隔离目标树中，为正式市场实际声明的注册命令工具生成完整的单插件目录。通过正式市场取得该目录的使用者 MUST 能直接运行包内命令，不依赖仓库兄弟目录或旧全局 npm。发布输入检查 MUST 比较源码的有效交付内容与正式市场实际内容，只排除已知装配形态差异，并保留其他发布输入、源引用及 Git 换行和模式保护；不得重新装配正式市场内容来遮蔽缺陷。
+正式市场实际声明的注册命令工具 MUST 提供可独立使用的完整单插件目录。通过正式市场取得该目录的使用者 MUST 能直接运行包内命令，不依赖仓库兄弟目录或旧全局 npm。发布输入检查 MUST 核对本次发布来源与正式市场实际交付内容；仅存在已支持的打包形态差异时不得误报版本变化，真实内容、来源或模式异常不得被掩盖。既有发布输入、源引用及 Git 换行和模式保护 MUST 保持。
 
 #### Scenario: 正式市场工具目录独立使用
 
@@ -536,44 +536,43 @@ Formal release projection MUST select canonical plugin sources from the release 
 - **THEN** 系统 MUST 允许通过包内 Node 启动器执行原有规格校验、项目初始化或构建及运行诊断
 - **THEN** 运行 MUST NOT 依赖源码树的其他插件目录或全局 npm 命令
 
-#### Scenario: 按正式选择装配且不污染源码
+#### Scenario: 按正式选择交付且不污染源码
 
 - **WHEN** 发布流程准备正式发布内容或核验预期发布内容
-- **THEN** 系统 MUST 只为本次正式清单实际声明的注册命令工具补齐随包运行实现
-- **THEN** 实现 MUST 来自当前目标发布树
-- **THEN** 系统 MUST 保持源码薄包装、公开 project 原地行为、开发包及 npm／完整 ZIP 原有行为
+- **THEN** 本次正式清单实际声明的注册命令工具 MUST 具备随包运行所需的完整内容
+- **THEN** 包内运行内容 MUST 与本次选定的正式发布来源一致
+- **THEN** 正式包准备或核验 MUST NOT 改写开发源码树，并 MUST 保持公开 project 原地行为、开发包及 npm／完整 ZIP 的既有行为
 - **THEN** 未选中命令工具的项目 MUST NOT 被要求提供无关工具或共享实现
 
-#### Scenario: 发布前拒绝无效装配输入
+#### Scenario: 发布前拒绝无效交付输入
 
 - **WHEN** 命令工具的必要输入缺失、包身份错误或目标路径越界
 - **THEN** 系统 MUST 明确失败并在外部发布、推送或创建发布前停止
-- **THEN** 系统 MUST NOT 将旧目录视为本次装配成功
+- **THEN** 历史产物 MUST NOT 被报告为本次有效交付
 
 #### Scenario: 重复正式投影与已发布引用一致
 
 - **WHEN** 相同有效输入重复生成正式发布内容或核验既有发布引用
-- **THEN** 系统 MUST 使用相同正式转换并得到一致内容
+- **THEN** 系统 MUST 得到一致的正式发布内容
 - **THEN** 既有发布引用与本次真实预期内容不符时 MUST 拒绝继续
 
-#### Scenario: 首次修复旧薄包装
+#### Scenario: 缺少独立运行内容的正式包需要升级
 
-- **WHEN** 正式市场仍包含依赖包外共享实现的旧薄包装
+- **WHEN** 正式市场命令工具包缺少独立运行所需内容
 - **THEN** 发布输入检查 MUST 识别真实交付内容变化并要求受影响工具升级版本
 
-#### Scenario: 正常装配不反复要求升级
+#### Scenario: 等价打包形态不反复要求升级
 
-- **WHEN** 当前源码、源引用及正式市场实际交付内容一致，只有已知薄包装与包内装配形态不同
+- **WHEN** 当前源码、源引用及正式市场实际交付内容一致，只有已支持的打包形态差异
 - **THEN** 发布输入检查 MUST NOT 仅因该形态差异再次要求升级版本
 
 #### Scenario: 真实发布内容或来源差异不能被忽略
 
-- **WHEN** 共享运行实现、其他发布输入、源引用或正式市场实际内容发生真实变化
+- **WHEN** 包内运行内容、其他发布输入、源引用或正式市场实际内容发生真实变化
 - **THEN** 系统 MUST 继续执行既有版本提升及来源保护
-- **THEN** 缺失、损坏或异常模式的正式随包文件 MUST NOT 被已知装配差异的排除规则掩盖
+- **THEN** 缺失、损坏或异常模式的正式随包文件 MUST NOT 因已支持的打包形态差异而被忽略
 
 #### Scenario: Git 换行与模式保持发布语义
 
 - **WHEN** 源码在不同平台检出或各源码引用使用不同 Git 属性
-- **THEN** 比较 MUST 按对应源码引用及目标发布路径的 Git 内容规范化和发布模式判断
 - **THEN** 正常换行转换 MUST NOT 单独制造版本变化，真实内容或模式变化 MUST NOT 被忽略

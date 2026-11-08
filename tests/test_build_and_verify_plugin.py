@@ -1596,6 +1596,79 @@ def test_runtime_guard_multiple_real_checks_share_existing_scheduler(tmp_path: P
     assert all((check['testRuntimeRole'] == 'real-unprotected' for check in payload['checks']))
 
 
+@pytest.mark.parametrize("payload", ["not-json", "null", "[]", "{}",
+    '{"platform":1,"uname":["s","n","r","v","m",""]}',
+    '{"platform":"p","uname":["s","n","r","v","m"]}',
+    '{"platform":"p","uname":["s","n","r","v","m",null]}',
+    '{"platform":"p","uname":["s","n","r","v","m",""],"extra":true}'])
+def test_runtime_guard_rejects_invalid_platform_payload_in_process(payload):
+    guard = load_build_and_verify_runner_module()._test_guard()
+    with pytest.raises(ValueError):
+        guard._decode_platform_snapshot(payload)
+
+
+@pytest.mark.parametrize("context", ["cloud", "local"])
+@pytest.mark.parametrize("cached", [False, True])
+def test_verify_platform_discovery_failure_does_not_run_or_cache_checks(tmp_path, monkeypatch, context, cached):
+    project = tmp_path / "project"
+    checks = [{"id": name, "command": [sys.executable, "memory.py"],
+        "checkParallel": True, "inputs": []} for name in ("first", "second")]
+    write_runner_config(project, verify_checks=checks)
+    path = project / ".build-and-verify/config.json"
+    config = read_json(path)
+    config.update(version=2)
+    config["verify"]["realChecks"] = []
+    write_json(path, config)
+    runner = load_build_and_verify_runner_module()
+    if cached:
+        for check in checks:
+            key = runner._cache_key(project, config, check, ["memory.py"], "test-implementation")
+            runner._cache_store(project, key, check)
+    probes = []
+    def failed_probe():
+        probes.append("probe")
+        raise RuntimeError("parent discovery failed")
+    monkeypatch.setattr(runner.platform, "platform", failed_probe)
+    executor = FakeRunner()
+    # Repeating a failure must not create a passed result for the next call.
+    for _ in range(2):
+        result = run_check(project, "verify", "--execution-context", context,
+            runner=executor, changed_files=["memory.py"])
+        assert executor.calls == []
+        if cached:
+            assert result.returncode == 0, result.stdout + result.stderr
+            assert result.stdout.count("cache-hit:") == 2
+        else:
+            assert result.returncode == 1
+            assert "runtime_guard_platform_metadata_failed: parent discovery failed" in result.stderr
+            assert "cache-hit:" not in result.stdout
+    assert probes == ([] if cached else ["probe", "probe"])
+
+
+@pytest.mark.parametrize("context", ["cloud", "local"])
+@pytest.mark.parametrize("version,real", [(1, []), (2, ["metadata-free"])])
+def test_verify_legacy_and_real_checks_do_not_sample_platform(tmp_path, monkeypatch, context, version, real):
+    project = tmp_path / "project"
+    command = [sys.executable, "-c", "print('unchanged')"]
+    write_runner_config(project, verify_checks=[{"id": "metadata-free", "command": command, "inputs": []}])
+    path = project / ".build-and-verify/config.json"
+    config = read_json(path)
+    config["version"] = version
+    if version == 2:
+        config["verify"]["realChecks"] = real
+    write_json(path, config)
+    runner = load_build_and_verify_runner_module()
+    def unexpected_probe():
+        raise AssertionError("platform metadata should not be sampled")
+    monkeypatch.setattr(runner.platform, "platform", unexpected_probe)
+    monkeypatch.setattr(runner.platform, "uname", unexpected_probe)
+    executor = FakeRunner({tuple(command): completed(command)})
+    result = run_check(project, "verify", "--execution-context", context,
+        runner=executor, changed_files=["memory.py"])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert executor.calls == [command]
+
+
 def test_build_and_verify_init_template_detects_pytest_xdist_dependency(tmp_path: Path) -> None:
     project = tmp_path / 'project'
     config = {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'verify.pytest-parallel', 'command': 'python -m pytest', 'pytestXdistWorkers': 'auto'}, {'id': 'verify.pytest-serial', 'command': 'python -m pytest'}]}}
@@ -3141,7 +3214,7 @@ def _declared_runner(project=None):
                 command = check["command"]
                 if not isinstance(command, (str, list)): continue
                 if config.get("version", 1) == 2 and check.get("id") not in config.get("verify", {}).get("realChecks", []):
-                    try: command, _ = module._test_guard().protected_command(command, Path("/memory/evidence/events.jsonl"))
+                    try: command, _ = module._test_guard().protected_command(command, Path("/memory/evidence/events.jsonl"), module._test_guard().platform_snapshot())
                     except ValueError: continue
                 key = tuple(command) if isinstance(command, list) else command
                 if key not in _LOG_COMMANDS and key not in _FAIL_ONCE_COMMANDS:
@@ -3154,6 +3227,11 @@ def memory_runtime(monkeypatch):
     state = SimpleNamespace(documents={}, inputs={}, logs={})
     monkeypatch.setattr(sys.modules[__name__], "_MEMORY", state)
     runner = load_build_and_verify_runner_module()
+    # Keep OS metadata outside this fixture's in-memory subprocess boundary.
+    metadata = runner.platform.uname_result("TestOS", "host", "release", "version", "machine")
+    metadata.__dict__["processor"] = ""
+    monkeypatch.setattr(runner.platform, "uname", lambda: metadata)
+    monkeypatch.setattr(runner.platform, "platform", lambda: "TestOS-platform")
     state.cache_store = runner._cache_store
     state.report_writer = runner._write_performance_report
     original_read_json = read_json

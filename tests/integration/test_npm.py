@@ -619,10 +619,36 @@ class TestBuildAndVerify:
     def test_unified_lifecycle_keeps_native_installations(self, tmp_path, npm_candidate):
         _assert_unified_lifecycle_keeps_native_installations(tmp_path, npm_candidate)
 
-    def test_packed_public_init_build_and_python_parallel_protection(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("context,processor", [("cloud", ""), ("local", '处理器 "CPU"')])
+    def test_packed_public_init_build_and_python_parallel_protection(self, tmp_path: Path, processor: str, context: str) -> None:
         prefix, executable = _installed_build_and_verify(tmp_path)
+        # Instrument only the private installation at the OS metadata boundary.
+        # The worker probe trap is installed before cache restoration, not in conftest.
+        package = prefix / ("node_modules" if os.name == "nt" else "lib/node_modules") / "@liuli195/build-and-verify"
+        fields = ["TestOS", "主机 name", "release", 'version "quoted"', "machine", processor]
+        expected_platform = 'TestOS 平台 "quoted"'
+        samples = tmp_path / "platform-samples"
+        runner_path = package / "python/build_and_verify_runner.py"
+        injection = ("\n_metadata = platform.uname_result(*" + repr(fields[:5]) + ")\n"
+            + "_metadata.__dict__['processor'] = " + repr(processor) + "\n"
+            + "platform.uname = lambda: _metadata\n"
+            + "def _sample_platform():\n"
+            + " with open(" + repr(str(samples)) + ", 'a') as stream: stream.write('sample\\n')\n"
+            + " return " + repr(expected_platform) + "\n"
+            + "platform.platform = _sample_platform\n")
+        runner_path.write_text(runner_path.read_text().replace("import platform\n", "import platform\n" + injection), encoding="utf-8")
+        guard_path = package / "python/build_and_verify_guard.py"
+        trap = ("\nif __name__ == '__main__':\n"
+            " def _unexpected_probe(*args): raise RuntimeError('unexpected platform OS probe')\n"
+            " _original_uname = platform.uname\n"
+            " def _cached_uname():\n"
+            "  if platform._uname_cache is None: return _unexpected_probe()\n"
+            "  return _original_uname()\n"
+            " platform.uname = _cached_uname\n"
+            " platform._Processor.get = _unexpected_probe\n")
+        guard_path.write_text(guard_path.read_text().replace("import platform\n", "import platform\n" + trap), encoding="utf-8")
         env = {**_isolated_env(tmp_path, prefix), "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
-            "PYTEST_ADDOPTS": "-n 2"}
+            "PYTEST_ADDOPTS": "-n 2", "BUILD_AND_VERIFY_PYTHON": sys.executable}
         project = tmp_path / "project"
         initialized = subprocess.run([executable, "init", "--project", str(project)],
             env=env, text=True, capture_output=True, check=False)
@@ -650,8 +676,12 @@ class TestBuildAndVerify:
             "  self.assertEqual(sqlite3.connect(':memory:').execute('select 42').fetchone(), (42,))\n"
             "def test_second():\n time.sleep(0.6)\n assert sum([1, 2, 3]) == 6\n")
         (project / "conftest.py").write_text(
-            "import os, time, pytest\nintervals=[]\n"
-            "@pytest.hookimpl(hookwrapper=True)\n"
+            "import os, time, pytest, platform\nintervals=[]\n"
+            + f"assert list(platform.uname()) == {fields!r}\n"
+            + f"assert platform.uname().processor == {processor!r}\n"
+            + f"assert platform.platform() == {expected_platform!r}\n"
+            + "assert platform.machine() == 'machine'\n"
+            + "@pytest.hookimpl(hookwrapper=True)\n"
             "def pytest_runtest_call(item):\n"
             " start=time.monotonic(); yield\n"
             " item.user_properties.append(('execution', (os.getpid(), start, time.monotonic())))\n"
@@ -669,26 +699,36 @@ class TestBuildAndVerify:
         config_path = project / ".build-and-verify/config.json"
         config_path.write_text(json.dumps(config))
         def verify():
-            return subprocess.run([executable, "verify", "--project", str(project), "--execution-context", "cloud"],
+            return subprocess.run([executable, "verify", "--project", str(project), "--execution-context", context],
                 env=env, text=True, capture_output=True, check=False, timeout=25)
         allowed = verify()
         assert allowed.returncode == 0, allowed.stdout + allowed.stderr
         assert allowed.stdout.count("2 passed") == 2
+        assert samples.read_text().splitlines() == ["sample"]
         proofs = [json.loads(line.removeprefix("runtime-guard: ")) for line in allowed.stdout.splitlines()
                   if line.startswith("runtime-guard: ")]
         assert len(proofs) == 2 and all(proof["workers"] == 2 for proof in proofs)
         assert max(proof["started"] for proof in proofs) < min(proof["finished"] for proof in proofs)
 
+        # One packaged failure proves swallowed violations still fail at the CLI.
+        if context != "cloud":
+            return
+
         (project / "conftest.py").write_text("")
         (project / "test_memory.py").write_text(
             "from pathlib import Path\n"
+            "import subprocess, sys\n"
             "def test_protected():\n"
             " try: Path('python-effect').write_text('forbidden')\n"
+            " except PermissionError: pass\n"
+            " try: subprocess.run([sys.executable, '-c', \"print('UNEXPECTED_CHILD_STARTED')\"])\n"
             " except PermissionError: pass\n")
         blocked = verify()
         assert blocked.returncode == 1, blocked.stdout + blocked.stderr
         assert "runtime_guard_violation" in blocked.stderr
         assert "python-effect" in blocked.stderr
+        assert "subprocess.Popen" in blocked.stderr
+        assert "UNEXPECTED_CHILD_STARTED" not in blocked.stdout
         assert not (project / "python-effect").exists()
         assert "cache-hit:" not in blocked.stdout
 

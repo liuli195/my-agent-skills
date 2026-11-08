@@ -78,13 +78,13 @@
 - **THEN** 系统 MUST NOT 重新扫描以重建剩余候选
 ### Requirement: MySpec 操作错误可见且重复执行稳定
 
-系统 MUST 通过本次已核验插件包的原Node启动器执行状态、校验、预览、差异和应用操作，不得直接调用内部Python实现或重新从PATH选择旧全局命令；系统 MUST 对无效主规格或 Delta（增量规格）返回非零结果和可识别错误，并确保相同输入的重复预览或应用不产生额外变化。主规格 MUST 包含 Purpose（目的）、Requirements（需求）、全局唯一的 Requirement 标题、`MUST` 或 `SHALL`，以及至少一个包含非空 `WHEN` 和 `THEN` 的 Scenario（场景）。Delta MUST 只支持 RENAMED、REMOVED、MODIFIED 和 ADDED，并按该顺序应用。
+系统 MUST 通过本次已核验插件包的公开 Node 命令入口执行状态、校验、预览、差异和应用操作，不得绕过该入口既有的校验、确认及生命周期约束，也不得换用旧全局命令；系统 MUST 对无效主规格或 Delta（增量规格）返回非零结果和可识别错误，并确保相同输入的重复预览或应用不产生额外变化。主规格 MUST 包含 Purpose（目的）、Requirements（需求）、全局唯一的 Requirement 标题、`MUST` 或 `SHALL`，以及至少一个包含非空 `WHEN` 和 `THEN` 的 Scenario（场景）。Delta MUST 只支持 RENAMED、REMOVED、MODIFIED 和 ADDED，并按该顺序应用。
 
 #### Scenario: Skill 执行确定性操作
 
 - **WHEN** 任一 MySpec Skill（技能）执行状态、校验、预览、完整差异或应用操作
-- **THEN** Skill MUST 使用同一随包Node启动器及对应既有业务子命令
-- **THEN** Skill MUST NOT 直调 `spec_ops.py`、写死机器绝对路径或猜测其他安装源
+- **THEN** Skill MUST 使用同一随包 Node 公开命令入口及对应既有业务子命令
+- **THEN** Skill MUST NOT 绕过当前包的公开入口、写死机器绝对路径或猜测其他安装源
 
 #### Scenario: 用户提交无效主规格
 

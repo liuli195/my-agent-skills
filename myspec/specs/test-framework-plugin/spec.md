@@ -692,6 +692,17 @@ Build and Verify（构建与验证）MUST 通过既有初始化覆盖命令及�
 
 - **WHEN** 守卫未加载、工作进程失联或崩溃，或必要启动／完成／违规记录缺失或不完整
 - **THEN** 检查 MUST 明确失败，不得把普通性能报告警告语义用于忽略保护记录缺失
+
+#### Scenario: Standard platform information remains readable
+
+- **WHEN** 同一次验证调用中，版本2普通 Python（编程语言）检查的项目代码在首次导入或后续运行中，于控制端或受支持本地工作进程，通过 Python 标准平台接口读取默认平台字符串及标准系统信息（系统名、主机名、发行版本、版本、机器、处理器）
+- **THEN** 读取 MUST 正常得到完整且一致的信息，并保留合法空字段
+- **THEN** 这些正常读取 MUST NOT 触发被守卫拒绝的外部命令或被误记为业务违规
+
+#### Scenario: Unavailable platform information cannot pass verification
+
+- **WHEN** 上述平台信息无法正确提供
+- **THEN** 检查 MUST 明确失败，不得伪造缺失信息或记为通过
 ### Requirement: Ordinary test native database boundary is explicit
 
 版本2普通检查 MUST 仅提供已适配的原生数据库窄边界；DuckDB（分析数据库）相关场景包括纯内存场景 MUST 由项目显式登记为聚焦的真实检查，继续真实运行并保留并行，但不享普通无副作用保证。
@@ -769,4 +780,4 @@ Build and Verify MUST 保留两个共享市场中的唯一有效安装及既有 
 #### Scenario: 执行本机快速交付验证
 
 - **WHEN** 维护者对九插件统一分发变更运行固定基线快速验证
-- **THEN** 系统 MUST 执行选中的原17组检查并报告实际结果；性能比较不使用通过缓存，且不将整合冒烟或离线检查的成功当作九项真实部署、分端新会话发现、初始化迁移或清理的验收完成。
+- **THEN** 系统 MUST 执行选中的既定17组检查并报告实际结果；性能比较不使用通过缓存，且不将整合冒烟或离线检查的成功当作九项真实部署、分端新会话发现、初始化迁移或清理的验收完成。
